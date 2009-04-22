@@ -14,11 +14,11 @@ URI::geo - The geo URI scheme.
 
 =head1 VERSION
 
-This document describes URI::geo version 0.01
+This document describes URI::geo version 0.02
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 =head1 SYNOPSIS
 
@@ -50,77 +50,84 @@ From L<http://geouri.org/>:
 {
   my $num = qr{-?\d{1,3}(?:\.\d+)?};
 
-  sub _location_of_pointy_thing {
-    my $class = shift;
-
-    my @lat = ( 'lat', 'latitude' );
-    my @lon = ( 'lon', 'long', 'longitude' );
-    my @ele = ( 'ele', 'alt', 'elevation', 'altitude' );
-
-    if ( ref $_[0] ) {
-      my $pt = shift;
-
-      croak "Too many arguments" if @_;
-
-      if ( UNIVERSAL::can( $pt, 'can' ) ) {
-
-        if ( $pt->can( 'latlong' ) ) {
-          return $pt->latlong;
-        }
-
-        my $can = sub {
-          my ( $pt, @keys ) = @_;
-          for my $key ( @keys ) {
-            return $key if $pt->can( $key );
-          }
-          return;
-        };
-
-        my $latk = $can->( $pt, @lat );
-        my $lonk = $can->( $pt, @lon );
-        my $elek = $can->( $pt, @ele );
-
-        if ( defined $latk && defined $lonk ) {
-          return $pt->$latk(), $pt->$lonk(),
-           defined $elek ? $pt->$elek() : undef;
-        }
-      }
-      elsif ( 'ARRAY' eq ref $pt ) {
-        return $class->_location_of_pointy_thing( @$pt );
-      }
-      elsif ( 'HASH' eq ref $pt ) {
-        my $has = sub {
-          my ( $pt, @keys ) = @_;
-          for my $key ( @keys ) {
-            return $key if exists $pt->{$key};
-          }
-          return;
-        };
-
-        my $latk = $has->( $pt, @lat );
-        my $lonk = $has->( $pt, @lon );
-        my $elek = $has->( $pt, @ele );
-
-        if ( defined $latk && defined $lonk ) {
-          return $pt->{$latk}, $pt->{$lonk},
-           defined $elek ? $pt->{$elek} : undef;
-        }
-      }
-
-      croak "Don't know how to convert point";
-    }
-    else {
-      croak "Need lat, lon or lat, lon, alt"
-       if @_ < 2 || @_ > 3;
-      return my ( $lat, $lon, $alt ) = @_;
-    }
-  }
-
   sub _parse {
     my ( $class, $path ) = @_;
     croak "Badly formed geo uri"
      unless $path =~ /^$num(?:,$num){1,2}$/;
     return my ( $lat, $lon, $alt ) = split /,/, $path;
+  }
+}
+
+=for internal
+
+Try hard to extract location information from something. We handle lat,
+lon, alt as scalars, arrays containing lat, lon, alt, hashes with
+suitably named keys and objects with suitably named methods.
+
+=cut
+
+sub _location_of_pointy_thing {
+  my $class = shift;
+
+  my @lat = ( 'lat', 'latitude' );
+  my @lon = ( 'lon', 'long', 'longitude' );
+  my @ele = ( 'ele', 'alt', 'elevation', 'altitude' );
+
+  if ( ref $_[0] ) {
+    my $pt = shift;
+
+    croak "Too many arguments" if @_;
+
+    if ( UNIVERSAL::can( $pt, 'can' ) ) {
+      for my $m ( qw( location latlong ) ) {
+        return $pt->$m() if $pt->can( $m );
+      }
+
+      my $can = sub {
+        my ( $pt, @keys ) = @_;
+        for my $key ( @keys ) {
+          return $key if $pt->can( $key );
+        }
+        return;
+      };
+
+      my $latk = $can->( $pt, @lat );
+      my $lonk = $can->( $pt, @lon );
+      my $elek = $can->( $pt, @ele );
+
+      if ( defined $latk && defined $lonk ) {
+        return $pt->$latk(), $pt->$lonk(),
+         defined $elek ? $pt->$elek() : undef;
+      }
+    }
+    elsif ( 'ARRAY' eq ref $pt ) {
+      return $class->_location_of_pointy_thing( @$pt );
+    }
+    elsif ( 'HASH' eq ref $pt ) {
+      my $has = sub {
+        my ( $pt, @keys ) = @_;
+        for my $key ( @keys ) {
+          return $key if exists $pt->{$key};
+        }
+        return;
+      };
+
+      my $latk = $has->( $pt, @lat );
+      my $lonk = $has->( $pt, @lon );
+      my $elek = $has->( $pt, @ele );
+
+      if ( defined $latk && defined $lonk ) {
+        return $pt->{$latk}, $pt->{$lonk},
+         defined $elek ? $pt->{$elek} : undef;
+      }
+    }
+
+    croak "Don't know how to convert point";
+  }
+  else {
+    croak "Need lat, lon or lat, lon, alt"
+     if @_ < 2 || @_ > 3;
+    return my ( $lat, $lon, $alt ) = @_;
   }
 }
 
@@ -138,6 +145,15 @@ sub _format {
    grep { defined } $lat, $lon, $alt;
 }
 
+sub _path {
+  my $class = shift;
+  my ( $lat, $lon, $alt ) = $class->_location_of_pointy_thing( @_ );
+  croak "Latitude out of range"  if $lat < -90  || $lat > 90;
+  croak "Longitude out of range" if $lon < -180 || $lon > 180;
+  $lon = 0 if $lat == -90 || $lon == 90;
+  return $class->_format( $lat, $lon, $alt );
+}
+
 =head1 INTERFACE 
 
 =head2 C<< new >>
@@ -146,13 +162,13 @@ Create a new URI::geo. The arguments should be either
 
 =over
 
-=item latitude, longitude and optionally altitude
+=item * latitude, longitude and optionally altitude
 
-=item a reference to an array containing lat, lon, alt
+=item * a reference to an array containing lat, lon, alt
 
-=item a reference to a hash with suitably named keys
+=item * a reference to a hash with suitably named keys
 
-=item a reference to an object with suitably named accessors
+=item * a reference to an object with suitably named accessors
 
 =back
 
@@ -161,8 +177,9 @@ represents a geographical location and have URI::geo do the right thing
 we try a number of different accessor names.
 
 If the object has a C<latlong> method (eg L<Geo::Point>) we'll use that.
-Otherwise we look for accessors called C<lat>, C<latitude>, C<lon>,
-C<long>, C<longitude>, C<ele>, C<alt>, C<elevation> or C<altitude>.
+If there's a C<location> method we call that. Otherwise we look for
+accessors called C<lat>, C<latitude>, C<lon>, C<long>, C<longitude>,
+C<ele>, C<alt>, C<elevation> or C<altitude> and use them.
 
 Often if you have an object or hash reference that represents a point
 you can pass it directly to C<new>.
@@ -172,18 +189,18 @@ you can pass it directly to C<new>.
 sub new {
   my $self  = shift;
   my $class = ref $self || $self;
-  my $uri   = uri_join 'geo', undef,
-   $class->_format( $class->_location_of_pointy_thing( @_ ) );
+  my $uri   = uri_join 'geo', undef, $class->_path( @_ );
   return bless \$uri, $class;
 }
 
 sub _init {
   my ( $class, $uri, $scheme ) = @_;
 
-  my ( undef, undef, $path ) = uri_split $uri;
-  $class->_parse( $path );
+  my $self = $class->SUPER::_init( $uri, $scheme );
 
-  $class->SUPER::_init( $uri, $scheme );
+  my $lat = $self->latitude;
+  $self->longitude( 0 ) if $lat == 90 || $lat == -90;
+  return $self;
 }
 
 =head2 C<location>
@@ -203,10 +220,8 @@ sub location {
 
   my ( $scheme, $auth, $path, $query, $frag ) = uri_split $$self;
 
-  if ( @_ ) {
-    $path = $self->_format( $self->_location_of_pointy_thing( @_ ) );
-    $$self = uri_join 'geo', $auth, $path, $query, $frag;
-  }
+  $$self = uri_join 'geo', $auth, $self->_path( @_ ), $query, $frag
+   if @_;
 
   return $self->_parse( $path );
 }
@@ -242,6 +257,7 @@ sub longitude { shift->_patch( 1, @_ ) }
 sub altitude  { shift->_patch( 2, @_ ) }
 
 1;
+
 __END__
 
 =head1 DEPENDENCIES
